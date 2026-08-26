@@ -84,10 +84,14 @@ curl.exe -X POST -u "admin:choose-a-long-local-password" -H "Content-Type: appli
 ## Test and package
 
 ```powershell
+mvn spotless:apply
+mvn spotless:check
 mvn test
 mvn package
 java -jar target/school-fee-management-0.0.1-SNAPSHOT.jar
 ```
+
+`mvn verify` also runs `spotless:check`, so CI fails if Java files are not formatted. Run `mvn spotless:apply` before committing to rewrite them using Google Java Format.
 
 ## Development workflow
 
