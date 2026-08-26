@@ -5,7 +5,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-<<<<<<< HEAD
 @Configuration
 class BootstrapConfiguration {
   @Bean
@@ -16,12 +15,6 @@ class BootstrapConfiguration {
       PasswordEncoder encoder,
       @Value("${BOOTSTRAP_ADMIN_USERNAME:}") String username,
       @Value("${BOOTSTRAP_ADMIN_PASSWORD:}") String password,
-=======
-/** Creates one local administrator, school, and core fee types when bootstrap variables are supplied. */
-@Configuration class BootstrapConfiguration {
-  @Bean ApplicationRunner bootstrapAdmin(UserRepository users, SchoolRepository schools, FeeTypeRepository feeTypes, PasswordEncoder encoder,
-      @Value("${BOOTSTRAP_ADMIN_USERNAME:}") String username, @Value("${BOOTSTRAP_ADMIN_PASSWORD:}") String password,
->>>>>>> 76d68d7 (Document application classes)
       @Value("${BOOTSTRAP_SCHOOL_NAME:}") String schoolName) {
     return args -> {
       if (!username.isBlank()
