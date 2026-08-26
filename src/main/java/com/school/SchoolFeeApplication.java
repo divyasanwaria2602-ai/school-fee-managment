@@ -5,6 +5,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
 public class SchoolFeeApplication {
-  public static void main(String[] args) { SpringApplication.run(SchoolFeeApplication.class, args); }
+  public static void main(String[] args) {
+    SpringApplication.run(SchoolFeeApplication.class, args);
+  }
 }
-
