@@ -1,12 +1,34 @@
-CREATE TYPE user_role AS ENUM ('ADMIN', 'SCHOOL');
-CREATE TYPE receipt_status AS ENUM ('ACTIVE', 'CANCELLED');
 CREATE TABLE schools (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name VARCHAR(150) NOT NULL, address TEXT, phone VARCHAR(30), email VARCHAR(254), active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE users (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, username VARCHAR(100) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL, role user_role NOT NULL, school_id BIGINT REFERENCES schools(id), active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT school_user_requires_school CHECK(role = 'ADMIN' OR school_id IS NOT NULL));
+CREATE TABLE users (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, username VARCHAR(100) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL, role VARCHAR(50) NOT NULL, school_id BIGINT REFERENCES schools(id), active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT school_user_requires_school CHECK(role = 'ADMIN' OR school_id IS NOT NULL));
 CREATE TABLE classes (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT NOT NULL REFERENCES schools(id), name VARCHAR(50) NOT NULL, section VARCHAR(50) NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(school_id, name, section));
+-- Insert default school and classes for a new DB. Recreate DB to apply these.
+INSERT INTO schools (name, address, phone, email, active) VALUES ('Default School', '', '', '', TRUE);
+
+INSERT INTO classes (school_id, name, section, active)
+SELECT s.id, v.name, v.section, v.active
+FROM (SELECT id FROM schools WHERE name = 'Default School' LIMIT 1) s
+CROSS JOIN (VALUES
+  ('Nursery', '', TRUE),
+  ('LKG', '', TRUE),
+  ('UKG', '', TRUE),
+  ('1', '', TRUE),
+  ('2', '', TRUE),
+  ('3', '', TRUE),
+  ('4', '', TRUE),
+  ('5', '', TRUE),
+  ('6', '', TRUE),
+  ('7', '', TRUE),
+  ('8', '', TRUE),
+  ('9', '', TRUE),
+  ('10', '', TRUE),
+  ('11', '', TRUE),
+  ('12', '', TRUE)
+) AS v(name, section, active);
+
 CREATE TABLE students (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT NOT NULL REFERENCES schools(id), class_id BIGINT NOT NULL REFERENCES classes(id), admission_number VARCHAR(50) NOT NULL, name VARCHAR(150) NOT NULL, father_name VARCHAR(150), mother_name VARCHAR(150), guardian_name VARCHAR(150), phone VARCHAR(30), active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(school_id, admission_number));
 CREATE TABLE fee_types (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT NOT NULL REFERENCES schools(id), code VARCHAR(50) NOT NULL, display_name VARCHAR(100) NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, UNIQUE(school_id, code));
 CREATE TABLE receipt_number_sequences (school_id BIGINT NOT NULL REFERENCES schools(id), receipt_year INTEGER NOT NULL, last_value BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(school_id, receipt_year));
-CREATE TABLE fee_receipts (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT NOT NULL REFERENCES schools(id), receipt_number VARCHAR(40) NOT NULL UNIQUE, student_id BIGINT NOT NULL REFERENCES students(id), total_amount NUMERIC(12,2) NOT NULL CHECK(total_amount > 0), payment_date DATE NOT NULL, status receipt_status NOT NULL DEFAULT 'ACTIVE', cancellation_reason VARCHAR(500), cancelled_by BIGINT REFERENCES users(id), cancelled_at TIMESTAMPTZ, created_by BIGINT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE fee_receipts (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT NOT NULL REFERENCES schools(id), receipt_number VARCHAR(40) NOT NULL UNIQUE, student_id BIGINT NOT NULL REFERENCES students(id), total_amount NUMERIC(12,2) NOT NULL CHECK(total_amount > 0), payment_date DATE NOT NULL, status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE', cancellation_reason VARCHAR(500), cancelled_by BIGINT REFERENCES users(id), cancelled_at TIMESTAMPTZ, created_by BIGINT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE fee_receipt_items (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, receipt_id BIGINT NOT NULL REFERENCES fee_receipts(id), fee_type_id BIGINT NOT NULL REFERENCES fee_types(id), amount NUMERIC(12,2) NOT NULL CHECK(amount > 0), UNIQUE(receipt_id, fee_type_id));
 CREATE TABLE audit_logs (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, school_id BIGINT REFERENCES schools(id), user_id BIGINT REFERENCES users(id), action VARCHAR(50) NOT NULL, entity_type VARCHAR(50) NOT NULL, entity_id BIGINT NOT NULL, old_value JSONB, new_value JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX idx_receipts_report ON fee_receipts(school_id, payment_date, status);

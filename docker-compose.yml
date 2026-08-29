@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: src/main/resources/db/migration/Dockerfile
     environment:
       POSTGRES_DB: school_fees
       POSTGRES_USER: school

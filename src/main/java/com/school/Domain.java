@@ -6,15 +6,6 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 
-enum Role {
-  ADMIN,
-  SCHOOL
-}
-
-enum ReceiptStatus {
-  ACTIVE,
-  CANCELLED
-}
 
 @MappedSuperclass
 abstract class Timestamped {
@@ -178,6 +169,9 @@ class FeeReceipt {
 
   String cancellationReason;
 
+  @Column(columnDefinition = "text")
+  String notes;
+
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "cancelled_by")
   AppUser cancelledBy;
@@ -238,10 +232,10 @@ class AuditLog {
   @Column(nullable = false)
   Long entityId;
 
-  @Column(columnDefinition = "jsonb")
+  @Column(columnDefinition = "text")
   String oldValue;
 
-  @Column(columnDefinition = "jsonb")
+  @Column(columnDefinition = "text")
   String newValue;
 
   @Column(nullable = false)

@@ -11,7 +11,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 record ClassRequest(@NotBlank String name, @NotBlank String section, Boolean active) {}
-
+ 
 record StudentRequest(
     @NotNull Long classId,
     @NotBlank String admissionNumber,
@@ -21,12 +21,20 @@ record StudentRequest(
     String guardianName,
     String phone,
     Boolean active) {}
-
+ 
+// Response DTOs so clients reliably receive class info with students
+record ClassRef(Long id, String name, String section) {}
+ 
+record StudentResponse(Long id, String admissionNumber, String name, String fatherName, String motherName, String guardianName, String phone, Boolean active, ClassRef schoolClass) {}
+ 
 record FeeTypeRequest(@NotBlank String code, @NotBlank String displayName, Boolean active) {}
-
+  
 record Breakdown(String feeTypeCode, String feeTypeName, BigDecimal amount) {}
-
+  
 record ReportResponse(String period, List<Breakdown> breakdown, BigDecimal total) {}
+
+// Partial update for student
+record UpdateStudentRequest(Boolean active) {}
 
 @RestController
 @RequestMapping("/api")
@@ -61,7 +69,7 @@ class ApiController {
   List<SchoolClass> listClasses(Authentication a, @RequestParam(required = false) Long schoolId) {
     return classes.findBySchoolId(school(a, schoolId));
   }
-
+ 
   @PostMapping("/classes")
   @ResponseStatus(HttpStatus.CREATED)
   SchoolClass createClass(
@@ -76,15 +84,19 @@ class ApiController {
     c.active = q.active() == null || q.active();
     return classes.save(c);
   }
-
+ 
   @GetMapping("/students")
-  List<Student> listStudents(Authentication a, @RequestParam(required = false) Long schoolId) {
-    return students.findBySchoolId(school(a, schoolId));
+  List<StudentResponse> listStudents(Authentication a, @RequestParam(required = false) Long schoolId) {
+    return students
+        .findBySchoolId(school(a, schoolId))
+        .stream()
+        .map(s -> new StudentResponse(s.id, s.admissionNumber, s.name, s.fatherName, s.motherName, s.guardianName, s.phone, s.active, new ClassRef(s.schoolClass.id, s.schoolClass.name, s.schoolClass.section)))
+        .toList();
   }
-
+ 
   @PostMapping("/students")
   @ResponseStatus(HttpStatus.CREATED)
-  Student createStudent(
+  StudentResponse createStudent(
       Authentication a,
       @RequestParam(required = false) Long schoolId,
       @Valid @RequestBody StudentRequest q) {
@@ -93,6 +105,10 @@ class ApiController {
         classes
             .findByIdAndSchoolId(q.classId(), sid)
             .orElseThrow(() -> new NoSuchElementException("Class not found"));
+    // ensure admission number uniqueness within school
+    if (students.findBySchoolIdAndAdmissionNumber(sid, q.admissionNumber()).isPresent()) {
+      throw new IllegalArgumentException("Admission number already exists for this school");
+    }
     Student s = new Student();
     s.school = c.school;
     s.schoolClass = c;
@@ -103,7 +119,26 @@ class ApiController {
     s.guardianName = q.guardianName();
     s.phone = q.phone();
     s.active = q.active() == null || q.active();
-    return students.save(s);
+    Student saved = students.save(s);
+    return new StudentResponse(saved.id, saved.admissionNumber, saved.name, saved.fatherName, saved.motherName, saved.guardianName, saved.phone, saved.active, new ClassRef(c.id, c.name, c.section));
+  }
+
+  @PatchMapping("/students/{id}")
+  StudentResponse updateStudent(
+      Authentication a,
+      @RequestParam(required = false) Long schoolId,
+      @PathVariable Long id,
+      @RequestBody UpdateStudentRequest q) {
+    Long sid = school(a, schoolId);
+    Student s =
+        students
+            .findByIdAndSchoolId(id, sid)
+            .orElseThrow(() -> new NoSuchElementException("Student not found"));
+    if (q.active() != null) s.active = q.active();
+    Student saved = students.save(s);
+    SchoolClass sc = saved.schoolClass;
+    ClassRef cref = sc != null ? new ClassRef(sc.id, sc.name, sc.section) : null;
+    return new StudentResponse(saved.id, saved.admissionNumber, saved.name, saved.fatherName, saved.motherName, saved.guardianName, saved.phone, saved.active, cref);
   }
 
   @GetMapping("/fee-types")
@@ -195,7 +230,8 @@ class ApiController {
   @ExceptionHandler({
     NoSuchElementException.class,
     IllegalArgumentException.class,
-    IllegalStateException.class
+    IllegalStateException.class,
+    org.springframework.dao.DataIntegrityViolationException.class
   })
   ResponseEntity<Map<String, String>> bad(RuntimeException e) {
     return ResponseEntity.badRequest()

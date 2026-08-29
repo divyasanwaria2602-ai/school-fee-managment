@@ -18,7 +18,8 @@ record FeeItemRequest(
 record CreateFeeRequest(
     @NotNull Long studentId,
     @NotNull LocalDate paymentDate,
-    @NotEmpty List<@Valid FeeItemRequest> items) {}
+    @NotEmpty List<@Valid FeeItemRequest> items,
+    String notes) {}
 
 record CancelRequest(@NotBlank @Size(max = 500) String reason) {}
 
@@ -35,6 +36,7 @@ record ReceiptResponse(
     LocalDate paymentDate,
     ReceiptStatus status,
     BigDecimal totalAmount,
+    String notes,
     List<ItemResponse> items) {}
 
 @Service
@@ -114,6 +116,7 @@ class FeeService {
     receipt.paymentDate = request.paymentDate();
     receipt.totalAmount = total;
     receipt.receiptNumber = "%d-%06d".formatted(year, serial.longValue());
+    receipt.notes = request.notes();
     for (int i = 0; i < request.items().size(); i++) {
       FeeReceiptItem item = new FeeReceiptItem();
       item.receipt = receipt;
@@ -160,17 +163,20 @@ class FeeService {
   }
 
   ReceiptResponse view(FeeReceipt r) {
+    String className = r.student.schoolClass != null ? r.student.schoolClass.name : "";
+    String section = r.student.schoolClass != null ? r.student.schoolClass.section : "";
     return new ReceiptResponse(
         r.id,
         r.receiptNumber,
         r.student.id,
         r.student.name,
         r.student.admissionNumber,
-        r.student.schoolClass.name,
-        r.student.schoolClass.section,
+        className,
+        section,
         r.paymentDate,
         r.status,
         r.totalAmount,
+        r.notes,
         r.items.stream()
             .map(
                 i ->
