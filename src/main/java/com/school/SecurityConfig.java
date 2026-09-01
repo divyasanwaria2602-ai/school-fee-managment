@@ -20,8 +20,9 @@ class SecurityConfig {
 
   @Bean
   UserDetailsService users(UserRepository users) {
-    return username ->
-        users
+    return username -> {
+      try {
+        return users
             .findByUsernameAndActiveTrue(username)
             .filter(u -> u.role != null)
             .map(
@@ -31,6 +32,11 @@ class SecurityConfig {
                         .authorities(List.of(new SimpleGrantedAuthority("ROLE_" + u.role.name())))
                         .build())
             .orElseThrow(() -> new UsernameNotFoundException(username));
+      } catch (Exception ex) {
+        // If DB is down or schema missing, treat as user not found to avoid 500 responses.
+        throw new UsernameNotFoundException(username);
+      }
+    };
   }
 
   @Bean

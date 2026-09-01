@@ -18,7 +18,8 @@ record CreateSchoolRequest(
 
 record CreateUserRequest(@NotBlank String username, @NotBlank String password) {}
 
-record UserResponse(Long id, String username, Role role, boolean active, Long schoolId, String schoolName) {}
+record UserResponse(
+    Long id, String username, Role role, boolean active, Long schoolId, String schoolName) {}
 
 @Service
 class UserManagementService {
@@ -118,11 +119,19 @@ class UserManagementService {
   }
 
   UserResponse view(AppUser user) {
-    return new UserResponse(user.id, user.username, user.role, user.active, user.school == null ? null : user.school.id, user.school == null ? null : user.school.name);
+    return new UserResponse(
+        user.id,
+        user.username,
+        user.role,
+        user.active,
+        user.school == null ? null : user.school.id,
+        user.school == null ? null : user.school.name);
   }
 
   private void seedDefaultClasses(School school) {
-    String[] names = {"Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
+    String[] names = {
+      "Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"
+    };
     for (String name : names) {
       SchoolClass c = new SchoolClass();
       c.school = school;
