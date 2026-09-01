@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 
-
 @MappedSuperclass
 abstract class Timestamped {
   @Column(nullable = false, updatable = false)
@@ -135,6 +134,34 @@ class FeeType {
 
   @Column(name = "display_name", nullable = false)
   String displayName;
+
+  boolean active = true;
+}
+
+@Entity
+@Table(name = "class_fee_structures")
+class ClassFeeStructure extends Timestamped {
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  Long id;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "school_id", nullable = false)
+  School school;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "class_id", nullable = false)
+  SchoolClass schoolClass;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "fee_type_id", nullable = false)
+  FeeType feeType;
+
+  @Column(name = "academic_year", nullable = false, length = 9)
+  String academicYear;
+
+  @Column(nullable = false, precision = 12, scale = 2)
+  BigDecimal amount;
 
   boolean active = true;
 }

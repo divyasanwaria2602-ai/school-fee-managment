@@ -2,9 +2,8 @@ package com.school;
 
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
-import org.postgresql.util.PGobject;
-
 import java.sql.SQLException;
+import org.postgresql.util.PGobject;
 
 @Converter(autoApply = false)
 public class ReceiptStatusConverter implements AttributeConverter<ReceiptStatus, Object> {

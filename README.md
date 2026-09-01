@@ -1,11 +1,50 @@
 # School Fee Management Service
 
-Spring Boot backend for school students, fee collection, immutable receipts, cancellation audit records, and reports.
+Spring Boot backend and static dashboard for school students, class-wise fee configuration, fee collection, immutable receipts, cancellation audit records, and monthly/yearly reports.
 
-## Run locally
+## Roles
 
-Install Java 25, Maven, and Docker Desktop. Start PostgreSQL with `docker compose up -d`, then run `mvn spring-boot:run`.
+- **ROOT** — global platform owner. Creates schools and the initial school administrator for each school.
+- **SCHOOL_ADMIN** — belongs to one school. Manages classes, students, fee types, class-wise fee amounts, school users, receipts, cancellations, and reports.
+- **SCHOOL_USER** — belongs to one school. Collects fees, prints receipts, manages students, and views receipts/reports. Cannot manage users or fee amounts and cannot cancel receipts.
 
-The responsive dashboard is served at `http://localhost:8080`; its API is under `http://localhost:8080/api`. On first start, create the bootstrap administrator using the environment variables in the setup guide. See [the backend design](outputs/school-fee-backend-design.md) for the full API and data design.
+## Fee structure
 
-See [the full local development guide](docs/local-development.md) for first-run bootstrapping, API examples, tests, and Git commands.
+Fee amounts are stored in `class_fee_structures` by school, class, fee type, and academic year (for example `2026-27`). When a receipt is created, the backend reads the configured amounts from this table; the browser cannot choose an arbitrary amount.
+
+## First run
+
+Install Java 25, Maven, and Docker Desktop.
+
+Start PostgreSQL:
+
+```text
+docker compose up -d
+```
+
+Then run the application:
+
+```text
+mvn spring-boot:run
+```
+
+Set the root credentials before first start:
+
+```text
+BOOTSTRAP_ROOT_USERNAME=root
+BOOTSTRAP_ROOT_PASSWORD=change-this-password
+```
+
+The dashboard is served at `http://localhost:8080` and the API is under `/api`.
+
+## Migrations
+
+Flyway is the single owner of database schema migrations. PostgreSQL Docker is intentionally DB-only; do not copy Flyway SQL files into `/docker-entrypoint-initdb.d`.
+
+For a clean local database:
+
+```text
+docker compose down -v
+docker compose up -d
+mvn spring-boot:run
+```

@@ -23,6 +23,7 @@ class SecurityConfig {
     return username ->
         users
             .findByUsernameAndActiveTrue(username)
+            .filter(u -> u.role != null)
             .map(
                 u ->
                     User.withUsername(u.username)
@@ -37,6 +38,10 @@ class SecurityConfig {
     return http.csrf(c -> c.disable())
         .httpBasic(b -> {})
         .formLogin(f -> f.disable())
+        .sessionManagement(
+            s ->
+                s.sessionCreationPolicy(
+                    org.springframework.security.config.http.SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(
             a -> a.requestMatchers("/actuator/health").permitAll().anyRequest().authenticated())
         .build();

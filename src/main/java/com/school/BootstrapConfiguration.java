@@ -8,35 +8,48 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @Configuration
 class BootstrapConfiguration {
   @Bean
-  ApplicationRunner bootstrapAdmin(
+  ApplicationRunner bootstrapRoot(
       UserRepository users,
-      SchoolRepository schools,
-      FeeTypeRepository feeTypes,
       PasswordEncoder encoder,
-      @Value("${BOOTSTRAP_ADMIN_USERNAME:}") String username,
-      @Value("${BOOTSTRAP_ADMIN_PASSWORD:}") String password,
-      @Value("${BOOTSTRAP_SCHOOL_NAME:}") String schoolName) {
+      org.springframework.jdbc.core.JdbcTemplate jdbc,
+      @Value("${BOOTSTRAP_ROOT_USERNAME:}") String username,
+      @Value("${BOOTSTRAP_ROOT_PASSWORD:}") String password) {
     return args -> {
-      if (!username.isBlank()
-          && !password.isBlank()
-          && users.findByUsernameAndActiveTrue(username).isEmpty()) {
-        School school = new School();
-        school.name = schoolName.isBlank() ? "My School" : schoolName;
-        school = schools.save(school);
-        for (String[] seed :
-            new String[][] {{"INSTITUTE_FEE", "Institute Fee"}, {"VAN_FEE", "Van Fee"}}) {
-          FeeType type = new FeeType();
-          type.school = school;
-          type.code = seed[0];
-          type.displayName = seed[1];
-          feeTypes.save(type);
+      // Wait for the users table to exist (DB may be restarting). Poll for up to 30s.
+      int attempts = 0;
+      while (attempts < 30) {
+        try {
+          Integer found = jdbc.queryForObject(
+              "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='users'",
+              Integer.class);
+          if (found != null && found == 1) {
+            break;
+          }
+        } catch (Exception e) {
+          // ignore and retry
         }
-        AppUser admin = new AppUser();
-        admin.username = username;
-        admin.passwordHash = encoder.encode(password);
-        admin.role = Role.ADMIN;
-        admin.school = school;
-        users.save(admin);
+        attempts++;
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+      }
+
+      try {
+        if (!username.isBlank() && !password.isBlank() && users.findByUsername(username).isEmpty()) {
+          AppUser root = new AppUser();
+          root.username = username;
+          root.passwordHash = encoder.encode(password);
+          root.role = Role.ROOT;
+          root.school = null;
+          root.active = true;
+          users.save(root);
+        }
+      } catch (Exception ex) {
+        // If something still fails, log and continue — don't crash the app during startup.
+        System.err.println("Bootstrap root skipped: " + ex.getMessage());
       }
     };
   }

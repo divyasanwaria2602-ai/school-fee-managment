@@ -1,6 +1,7 @@
 package com.school;
 
 public enum Role {
-    ADMIN,
-    SCHOOL
+  ROOT,
+  SCHOOL_ADMIN,
+  SCHOOL_USER
 }

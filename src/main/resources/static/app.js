@@ -1,301 +1,117 @@
-const state={schoolId:localStorage.schoolId||1,user:localStorage.user||'',password:localStorage.password||'',students:[],classes:[],types:[],receipts:[]};
-let pendingToggleStudentId = null;
-let pendingToggleNewState = null;
-const $=s=>document.querySelector(s), esc=v=>String(v||'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const storedSchoolId=localStorage.schoolId;const parsedSchoolId=storedSchoolId&&storedSchoolId!=='null'&&storedSchoolId!=='undefined'?Number(storedSchoolId):null;
+const state={schoolId:Number.isFinite(parsedSchoolId)?parsedSchoolId:null,user:localStorage.user||'',password:localStorage.password||'',role:'',schoolName:'',me:null,students:[],classes:[],types:[],receipts:[],feeStructure:[],schools:[],users:[]};
+let pendingAction=null;
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\\':'&#92;'}[c]));
 const money=n=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(Number(n||0));
-
+const today=()=>new Date().toISOString().slice(0,10);
+function academicYearForDate(value){const d=new Date(`${value||today()}T00:00:00`);const y=d.getMonth()>=3?d.getFullYear():d.getFullYear()-1;return `${y}-${String((y+1)%100).padStart(2,'0')}`;}
 async function api(path,opts={}){
-  if(!state.user) throw new Error('Connect your school first.');
-  const res = await fetch('/api'+path, {...opts, headers: {...(opts.headers||{}), Authorization: 'Basic '+btoa(`${state.user}:${state.password}`), 'Content-Type':'application/json'}});
-  if(!res.ok){ let m='Request failed'; try{ m=(await res.json()).message||m }catch{} throw new Error(m) }
+  if(!state.user) throw new Error('Connect your account first.');
+  const headers={...(opts.headers||{}),Authorization:'Basic '+btoa(`${state.user}:${state.password}`),'Content-Type':'application/json'};
+  const res=await fetch('/api'+path,{...opts,headers});
+  if(!res.ok){let m='Request failed';try{m=(await res.json()).message||m}catch{}throw new Error(m)}
   return res.status===204?null:res.json();
 }
-function schoolQuery(){ return `schoolId=${state.schoolId}` }
-
+function isSchoolRole(){return state.role==='SCHOOL_ADMIN'||state.role==='SCHOOL_USER'}
+function isAdmin(){return state.role==='SCHOOL_ADMIN'}
+function setNotice(message,error=false){const n=$('#notice');if(!n)return;n.textContent=message;n.classList.toggle('hidden',!message);n.classList.toggle('error',error);if(message)setTimeout(()=>n.classList.add('hidden'),4500)}
+function showView(name){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));const v=$(`#${name}View`);if(v)v.classList.add('active');document.querySelectorAll('.nav-link[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name));const titles={dashboard:'Overview',rootOverview:'Overview',students:'Students',collect:'Collect fees',receipts:'Receipts',reports:'Reports',feeStructure:'Fee structure',users:'Users',schools:'Schools'};$('#pageTitle').textContent=titles[name]||'Overview';document.querySelector('.sidebar')?.classList.remove('open');if(name==='reports')runReport();if(name==='receipts')renderReceipts();if(name==='users')loadUsers();if(name==='feeStructure')loadFeeStructure();if(name==='schools')loadSchools()}
+function applyRoleUI(){
+  document.querySelectorAll('.admin-only').forEach(e=>e.classList.toggle('hidden',!isAdmin()));
+  document.querySelectorAll('.root-only').forEach(e=>e.classList.toggle('hidden',state.role!=='ROOT'));
+  document.querySelectorAll('.school-only').forEach(e=>e.classList.toggle('hidden',!isSchoolRole()));
+  const root=state.role==='ROOT';
+  document.querySelectorAll('[data-view="students"],[data-view="collect"],[data-view="receipts"],[data-view="reports"]').forEach(e=>e.classList.toggle('hidden',root));
+  document.querySelector('.school-overview')?.classList.toggle('hidden',root);
+  $('#profileName').textContent=state.user||'User';
+  $('#profileInitial').textContent=(state.user||'U')[0].toUpperCase();
+  const roleNames={ROOT:'Root administrator',SCHOOL_ADMIN:'School administrator',SCHOOL_USER:'School user'};
+  const workspaceNames={ROOT:'Root administration',SCHOOL_ADMIN:state.schoolName||'School administration',SCHOOL_USER:state.schoolName||'School workspace'};
+  $('#profileRole').textContent=roleNames[state.role]||'Not connected';
+  $('#schoolLabel').textContent=workspaceNames[state.role]||'School workspace';
+  const todayNames={ROOT:'ROOT ADMINISTRATION',SCHOOL_ADMIN:'SCHOOL ADMINISTRATION',SCHOOL_USER:'SCHOOL WORKSPACE'};
+  $('#today').textContent=todayNames[state.role]||'SCHOOL WORKSPACE';
+}
+async function loadMe(){state.me=await api('/me');state.role=state.me.role;if(state.role==='ROOT'){state.schoolId=null;state.schoolName='';}else{state.schoolId=state.me.schoolId||null;state.schoolName=state.me.schoolName||'';}applyRoleUI()}
+async function loadSchoolInfo(){if(state.role==='ROOT'){state.schoolName='';$('#connectedInfo').textContent=`${state.user} · Root administrator`;return;}$('#connectedInfo').textContent=state.schoolName?`${state.user} · ${state.schoolName}`:`${state.user} · School`;applyRoleUI()}
 async function loadBase(){
-  [state.students,state.classes,state.types,state.receipts]=await Promise.all([
-    api(`/students?${schoolQuery()}`),
-    api(`/classes?${schoolQuery()}`),
-    api(`/fee-types?${schoolQuery()}`),
-    api(`/fees?${schoolQuery()}`)
-  ]);
-  // attempt to fetch school info to display friendly name
-  try{
-    const school = await api(`/schools/${state.schoolId}`);
-    state.schoolName = school.name;
-    const el = document.getElementById('schoolNameDisplay'); if(el) el.value = state.schoolName;
-    const ci = document.getElementById('connectedInfo'); if(ci) ci.textContent = `Connected as ${state.user} — ${state.schoolName}`;
-  }catch(e){ console.warn('Could not load school info', e); }
+  await loadMe();
+  if(state.role==='ROOT'){await loadSchools();renderRootOverview();return;}
+  const q=schoolQuery();
+  const qs=q?`?${q}`:'';
+  [state.students,state.classes,state.types,state.receipts]=await Promise.all([api(`/students${qs}`),api(`/classes${qs}`),api(`/fee-types${qs}`),api(`/fees${qs}`)]);
+  await loadSchoolInfo();
   renderAll();
-  // render receipts list and recent payments
-  renderReceipts();
-  // refresh receipts student list if class selected
-  const fc = $('#feeClass'); if(fc && fc.value) fc.dispatchEvent(new Event('change'));
+  await loadFeeStructure();
+  updateDashboard();
 }
-
-// receipt rendering helpers
-function receiptRow(r, all=false){
-  return `<tr data-receipt-id="${r.id}"><td><b>${esc(r.receiptNumber)}</b></td><td>${esc(r.studentName)}</td><td>${r.paymentDate}</td>${all?`<td>${(r.items||[]).map(i=>esc(i.feeTypeName)).join(', ')}</td>`:''}<td><b>${money(r.totalAmount)}</b></td><td><span class="badge ${String(r.status).toLowerCase()}">${esc(String(r.status))}</span></td><td><button type="button" class="secondary print-btn" data-id="${r.id}">Print</button></td></tr>`
-}
-
-function renderReceipts(){
-  try{
-    const rows = state.receipts && state.receipts.length ? state.receipts.map(r=>receiptRow(r,true)).join('') : '';
-    $('#receiptRows').innerHTML = rows || '<tr><td colspan="7" class="empty">No receipts found.</td></tr>';
-    // attach print handlers
-    document.querySelectorAll('.print-btn').forEach(b=>b.addEventListener('click', ()=>{ const id=b.dataset.id; printReceipt(Number(id)); }));
-
-function printReceipt(id){
-  const r = (state.receipts||[]).find(x=>Number(x.id)===Number(id));
-  if(r){ printWindowForReceipt(r); return; }
-  // fetch single receipt if not cached
-  api(`/fees/${id}?${schoolQuery()}`).then(res=>{ printWindowForReceipt(res); }).catch(e=>alert(e.message));
-}
-
-    // recent payments on dashboard
-    if($('#recentPayments')){
-      $('#recentPayments').innerHTML = (state.receipts && state.receipts.length ? state.receipts.slice(0,5).map(receiptRow).join('') : '<tr><td colspan="5" class="empty">No payments yet.</td></tr>');
-    }
-    // summary counts
-    $('#receiptCount') && (document.getElementById('receiptCount').textContent = state.receipts? state.receipts.length : '0');
-    const total = (state.receipts||[]).reduce((s,r)=>s+(Number(r.totalAmount)||0),0);
-    $('#totalCollected') && (document.getElementById('totalCollected').textContent = money(total));
-    $('#studentCount') && (document.getElementById('studentCount').textContent = (state.students||[]).length);
-  }catch(e){ console.error('renderReceipts', e); }
-}
-
-// reports
-async function runReport(){
-  if(!state.user) return;
-  try{
-    const v = document.getElementById('reportPeriod')?.value;
-    if(!v) return;
-    const [y,m] = v.split('-');
-    if(!y) return;
-    const classId = document.getElementById('reportClass')?.value || '';
-    const classParam = classId? `&classId=${classId}` : '';
-    const data = await api(`/reports/fees/monthly?${schoolQuery()}&year=${y}&month=${Number(m)}${classParam}`);
-    document.getElementById('reportTotal') && (document.getElementById('reportTotal').textContent = money(data.total));
-    document.getElementById('reportCaption') && (document.getElementById('reportCaption').textContent = data.period);
-    const max = Math.max(...(data.breakdown.map(x=>Number(x.amount))||[0]),1);
-    document.getElementById('reportBreakdown') && (document.getElementById('reportBreakdown').innerHTML = data.breakdown.map(x=>`<div class="breakdown-row"><b>${esc(x.feeTypeName)}</b><div class="bar"><i style="width:${Number(x.amount)/max*100}%"></i></div><b>${money(x.amount)}</b></div>`).join('')||'<p class="empty">No active collections for this month.</p>');
-  }catch(e){ alert(e.message); }
-}
-
-
+function classRank(name){const order={nursery:0,lkg:1,ukg:2,'1':3,'2':4,'3':5,'4':6,'5':7,'6':8,'7':9,'8':10,'9':11,'10':12,'11':13,'12':14};const key=String(name??'').trim().toLowerCase();return Object.prototype.hasOwnProperty.call(order,key)?order[key]:1000;}
 function renderAll(){
-  // sort classes
-  state.classes.sort((a,b)=>{const an=Number(a.name),bn=Number(b.name);if(!isNaN(an)&&!isNaN(bn)&&an!==bn) return an-bn;const n=a.name.localeCompare(b.name,undefined,{numeric:true});if(n!==0) return n;return (a.section||'').localeCompare(b.section||'');});
-
-  const classOpts = state.classes.map(c=>`<option value="${c.id}">${esc(c.name)}${c.section?'-'+esc(c.section):''}</option>`).join('');
-  $('#newClass').innerHTML = '<option value="">Choose a class</option>' + (classOpts||'') + '<option value="__new">+ Add new class...</option>';
-  $('#classFilter').innerHTML = '<option value="">All classes</option>' + (classOpts||'');
-  const feeClassEl = $('#feeClass'); if(feeClassEl) feeClassEl.innerHTML = '<option value="">Choose a class</option>' + (classOpts||'');
-  const reportClassEl = document.getElementById('reportClass'); if(reportClassEl) reportClassEl.innerHTML = '<option value="">All classes</option>' + (classOpts||'');
-
-  // students list
-  const rows = state.students.map(s=>{
-    const clsName = s.schoolClass?.name ? esc(s.schoolClass.name) : '';
-    const clsSection = s.schoolClass?.section ? esc(s.schoolClass.section) : '';
-    const classDisplay = clsName + (clsSection ? ('–' + clsSection) : '');
-    const actionBtn = `<button type="button" class="secondary toggle-active" data-id="${s.id}" data-active="${s.active}">${s.active? 'Deactivate' : 'Activate'}</button>`;
-    return `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.admissionNumber)}</td><td>${classDisplay}</td><td>${esc(s.fatherName||s.guardianName||'—')}</td><td>${esc(s.phone||'—')}</td><td><span class="badge ${s.active?'active':'cancelled'}">${s.active?'ACTIVE':'INACTIVE'}</span></td><td>${actionBtn}</td></tr>`
-  }).join('');
-  $('#studentRows').innerHTML = rows || '<tr><td colspan="6" class="empty">No students found.</td></tr>';
-
-  // reset feeItems and summary if present
-  if($('#feeItems')){
-    $('#feeItems').innerHTML = '';
-    if(state.types && state.types.length) addFeeRow();
-    else $('#summaryItems').innerHTML = '<p class="muted">Add fee items to begin.</p>';
-    summary();
-  }
+  state.classes.sort((a,b)=>{const ra=classRank(a.name),rb=classRank(b.name);if(ra!==rb)return ra-rb;return String(a.section||'').localeCompare(String(b.section||''),undefined,{numeric:true,sensitivity:'base'});});
+  const opts=state.classes.map(c=>`<option value="${c.id}">${esc(c.name)}${c.section?'-'+esc(c.section):''}</option>`).join('');
+  if($('#newClass'))$('#newClass').innerHTML='<option value="">Choose a class</option>'+opts+'<option value="__new">+ Add new class...</option>';
+  if($('#classFilter'))$('#classFilter').innerHTML='<option value="">All classes</option>'+opts;
+  if($('#feeClass'))$('#feeClass').innerHTML='<option value="">Choose a class</option>'+opts;
+  if($('#reportClass'))$('#reportClass').innerHTML='<option value="">All classes</option>'+opts;
+  renderStudents();renderFeeClassStudents();
 }
-
-// summary updates total and listing
-function summary(){
-  const rows = [...document.querySelectorAll('.fee-row')];
-  const items = rows.map(r=>{
-    const sel = r.querySelector('select.fee-type');
-    const txt = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].text : '';
-    const amt = Number(r.querySelector('input.fee-amount')?.value)||0;
-    return {name: txt, amount: amt};
-  }).filter(x=>x.amount>0 && x.name && x.name!=='Fee type');
-  const total = items.reduce((s,x)=>s+x.amount,0);
-  $('#feeTotal').textContent = money(total);
-  if(items.length){
-    $('#summaryItems').innerHTML = items.map(i=>`<div class="summary-line"><span>${esc(i.name)}</span><b>${money(i.amount)}</b></div>`).join('');
-  } else {
-    $('#summaryItems').innerHTML = '<p class="muted">Add fee items to begin.</p>';
-  }
-}
-
-// event wiring
-document.addEventListener('click',e=>{const t=e.target; if(t.matches('[data-view],[data-go]')){ e.preventDefault(); const name=t.dataset.view||t.dataset.go; document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.querySelectorAll('.nav-link[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name)); $(`#${name}View`).classList.add('active'); // page title and sidebar
-    const titles={dashboard:'Overview',students:'Students',collect:'Collect fees',receipts:'Receipts',reports:'Reports'}; $('#pageTitle')&&(document.getElementById('pageTitle').textContent = titles[name]||''); document.querySelector('.sidebar')&&document.querySelector('.sidebar').classList.remove('open'); if(name==='receipts') renderReceipts(); if(name==='reports') runReport(); }
- if(t.id==='openStudent') $('#studentDialog').showModal();
-});
-
-// settings/profile buttons (open connection dialog)
-$('#settingsBtn')?.addEventListener('click', ()=>{ $('#connectionDialog').showModal(); });
-$('#profileBtn')?.addEventListener('click', ()=>{ $('#connectionDialog').showModal(); });
-
-// refresh receipts button
-$('#refreshReceipts')?.addEventListener('click', async ()=>{ try{ state.receipts = await api(`/fees?${schoolQuery()}`); renderReceipts(); }catch(e){ alert(e.message) } });
-
-// connection
-$('#connectionForm').addEventListener('submit',async e=>{ e.preventDefault(); const sub = e.submitter && e.submitter.value ? e.submitter.value : null; if(sub === 'cancel'){ $('#connectionDialog').close(); return; } // perform connect
-  const loginType = (document.getElementById('loginType') && document.getElementById('loginType').value) || 'school';
-  // if admin and numeric id provided in the hidden input, use it; otherwise keep default
-  const sidInput = document.getElementById('schoolId');
-  const sid = sidInput && sidInput.value ? Number(sidInput.value) : state.schoolId || 1;
-  state.schoolId = sid;
-  state.user = $('#username').value; state.password = $('#password').value; localStorage.schoolId = state.schoolId; localStorage.user = state.user; localStorage.password = state.password; try{ await loadBase(); $('#connectionDialog').close(); $('#profileInitial').textContent = state.user[0].toUpperCase(); $('#profileName').textContent = state.user; const ci = document.getElementById('connectedInfo'); if(ci) ci.textContent = `Connected as ${state.user} — ${state.schoolName||('School #'+state.schoolId)}`; }catch(err){ alert(err.message); }});
-// adapt schoolId requirement when login type changes
-document.getElementById('loginType')?.addEventListener('change', e=>{ const v = e.target.value; const sidWrapper = document.getElementById('schoolIdInputWrapper'); if(!sidWrapper) return; if(v==='admin'){ sidWrapper.classList.remove('hidden'); } else { sidWrapper.classList.add('hidden'); } });
-// allow editing school id
-document.getElementById('editSchoolId')?.addEventListener('click', ()=>{ const w = document.getElementById('schoolIdInputWrapper'); if(w) w.classList.toggle('hidden'); });
-// logout
-$('#logoutBtn')?.addEventListener('click', ()=>{ localStorage.removeItem('user'); localStorage.removeItem('password'); localStorage.removeItem('schoolId'); state.user = ''; state.password = ''; state.schoolId = 1; state.schoolName = undefined; $('#profileInitial').textContent = ''; $('#profileName').textContent = ''; const ci = document.getElementById('connectedInfo'); if(ci) ci.textContent = 'Not connected'; $('#connectionDialog').showModal(); });
-
-// report button
-$('#runReport')?.addEventListener('click', runReport);
-
-
-// new class panel
-$('#newClass')?.addEventListener('change',()=>{ if($('#newClass').value==='__new') $('#newClassPanel').classList.remove('hidden'); else $('#newClassPanel').classList.add('hidden'); });
-$('#createClassBtn').addEventListener('click',async ()=>{ const name=$('#newClassName').value.trim(); const section=$('#newClassSection').value.trim(); if(!name) return alert('Enter class name'); try{ const created = await api(`/classes?${schoolQuery()}`, {method:'POST', body: JSON.stringify({name, section, active:true})}); await loadBase(); $('#newClass').value = created.id; $('#newClassPanel').classList.add('hidden'); $('#newClassName').value=''; $('#newClassSection').value=''; alert('Class created'); }catch(e){ alert(e.message); } });
-$('#cancelCreateClass').addEventListener('click',()=>{ $('#newClassPanel').classList.add('hidden'); $('#newClassName').value=''; $('#newClassSection').value=''; $('#newClass').value=''; });
-
-// student form
-$('#studentForm').addEventListener('submit',async e=>{ e.preventDefault(); let classVal = $('#newClass').value; if(String(classVal).startsWith('__seed_')){ const className = classVal.replace('__seed_',''); const created = await api(`/classes?${schoolQuery()}`,{method:'POST', body: JSON.stringify({name: className, section:'', active:true})}); classVal = created.id; } try{ await api(`/students?${schoolQuery()}`,{method:'POST', body: JSON.stringify({classId: Number(classVal), admissionNumber: $('#newAdmission').value, name: $('#newName').value, fatherName: $('#newGuardian').value, phone: $('#newPhone').value})}); $('#studentDialog').close(); e.target.reset(); await loadBase(); alert('Student added'); }catch(err){ alert(err.message); } });
-
-// fee-row helper
-function createFeeRow(){
-  const row=document.createElement('div'); row.className='fee-row';
-  // only allow TUITION and VAN in dropdown (if present); otherwise fall back to all types
-  const allowed = (state.types||[]).filter(t => ['TUITION','VAN'].includes(String(t.code||'').toUpperCase()));
-  const options = (allowed.length ? allowed : (state.types||[])).map(t=>`<option value="${t.id}">${esc(t.displayName)}</option>`).join('');
-  const selectHTML = `<select class="fee-type"><option value="">Fee type</option>${options}</select>`;
-  row.innerHTML = selectHTML + `<input class="fee-amount" type="number" min="0.01" step="0.01" placeholder="Amount">` + `<button type="button" class="remove" aria-label="Remove item">×</button>`;
-  const sel = row.querySelector('select.fee-type');
-  const amt = row.querySelector('input.fee-amount');
-  const rem = row.querySelector('button.remove');
-  sel.addEventListener('change', summary);
-  amt.addEventListener('input', summary);
-  rem.addEventListener('click', ()=>{ row.remove(); summary(); });
-  return row;
-}
-
-function addFeeRow(){
-  if(!state.types || !state.types.length){
-    // No dynamic fee types allowed in this build — inform the user
-    alert('No fee types available. Contact administrator.');
-    return;
-  }
-  const row = createFeeRow(); $('#feeItems').append(row); amtFocus(row);
-  summary();
-}
-function amtFocus(row){ const a = row.querySelector('input.fee-amount'); a && a.focus(); }
-
-$('#addFeeItem')?.addEventListener('click', addFeeRow);
-
-
-// receipt student population
-$('#feeClass')?.addEventListener('change', ()=>{
-  const cl = $('#feeClass').value;
-  if(!cl){ $('#feeStudent').innerHTML = '<option value="">Choose a student</option>'; $('#feeStudent').disabled = true; return; }
-  const opts = state.students.filter(s=>String(s.schoolClass?.id)===String(cl)).map(s=>`<option value="${s.id}">${esc(s.name)} (${esc(s.admissionNumber)})</option>`).join('');
-  $('#feeStudent').innerHTML = '<option value="">Choose a student</option>' + (opts||'<option value="">No students in this class</option>');
-  $('#feeStudent').disabled = false;
-});
-
-// fee form submit
-$('#feeForm')?.addEventListener('submit', async e=>{
-  e.preventDefault();
-  const items = [...document.querySelectorAll('.fee-row')].map(r=>({ feeTypeId: Number(r.querySelector('select.fee-type').value), amount: Number(r.querySelector('input.fee-amount').value) })).filter(x=>x.feeTypeId && x.amount>0);
-  if(!items.length) { alert('Add at least one fee item.'); return; }
+function renderStudents(){const search=($('#studentSearch')?.value||'').trim().toLowerCase();const cls=$('#classFilter')?.value||'';const rows=state.students.filter(s=>{const text=`${s.name} ${s.admissionNumber}`.toLowerCase();return(!search||text.includes(search))&&(!cls||String(s.schoolClass?.id)===String(cls));}).map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.admissionNumber)}</td><td>${esc(s.schoolClass?.name||'')}${s.schoolClass?.section?'-'+esc(s.schoolClass.section):''}</td><td>${esc(s.fatherName||s.guardianName||'—')}</td><td>${esc(s.phone||'—')}</td><td><span class="badge ${s.active?'active':'cancelled'}">${s.active?'ACTIVE':'INACTIVE'}</span></td><td>${isSchoolRole()?`<button type="button" class="secondary student-toggle" data-id="${s.id}" data-active="${s.active}">${s.active?'Deactivate':'Activate'}</button>`:''}</td></tr>`).join('');$('#studentRows').innerHTML=rows||'<tr><td colspan="7" class="empty">No matching students.</td></tr>'}
+function renderFeeClassStudents(){const cl=$('#feeClass')?.value||'';const opts=state.students.filter(s=>s.active&&String(s.schoolClass?.id)===String(cl)).map(s=>`<option value="${s.id}">${esc(s.name)} (${esc(s.admissionNumber)})</option>`).join('');$('#feeStudent').innerHTML='<option value="">Choose a student</option>'+opts;$('#feeStudent').disabled=!cl||!opts}
+function receiptRow(r,all=false){const actions=[`<button type="button" class="secondary print-btn" data-id="${r.id}">Print</button>`];if(isAdmin()&&r.status==='ACTIVE')actions.push(`<button type="button" class="danger-button cancel-receipt" data-id="${r.id}">Cancel</button>`);return `<tr><td><b>${esc(r.receiptNumber)}</b></td><td>${esc(r.studentName)}</td><td>${esc(r.paymentDate)}</td>${all?`<td>${(r.items||[]).map(i=>esc(i.feeTypeName)).join(', ')}</td>`:''}<td><b>${money(r.totalAmount)}</b></td><td><span class="badge ${String(r.status).toLowerCase()}">${esc(r.status)}</span></td><td class="actions-cell">${actions.join(' ')}</td></tr>`}
+function renderReceipts(){const rows=state.receipts.map(r=>receiptRow(r,true)).join('');$('#receiptRows').innerHTML=rows||'<tr><td colspan="7" class="empty">No receipts found.</td></tr>';$('#recentPayments').innerHTML=state.receipts.slice(0,5).map(r=>receiptRow(r)).join('')||'<tr><td colspan="5" class="empty">No payments yet.</td></tr>'}
+function updateDashboard(){const now=new Date();const y=now.getFullYear(),m=now.getMonth();const month=state.receipts.filter(r=>{const d=new Date(`${r.paymentDate}T00:00:00`);return r.status==='ACTIVE'&&d.getFullYear()===y&&d.getMonth()===m});const prev=state.receipts.filter(r=>{const d=new Date(`${r.paymentDate}T00:00:00`);const p=new Date(y,m-1,1);return r.status==='ACTIVE'&&d.getFullYear()===p.getFullYear()&&d.getMonth()===p.getMonth()});const total=month.reduce((s,r)=>s+Number(r.totalAmount||0),0),prevTotal=prev.reduce((s,r)=>s+Number(r.totalAmount||0),0);const pct=prevTotal?((total-prevTotal)/prevTotal*100):null;$('#totalCollected').textContent=money(total);$('#receiptCount').textContent=month.length;$('#studentCount').textContent=state.students.filter(s=>s.active).length;const trend=$('#collectionTrend');if(trend)trend.textContent=pct===null?'—':`${pct>=0?'↗':'↘'} ${Math.abs(pct).toFixed(0)}%`;renderReceipts()}
+function createConfiguredFeeRow(){const row=document.createElement('div');row.className='fee-row';row.innerHTML='<select class="fee-type"><option value="">Fee type</option></select><input class="fee-amount" type="number" readonly><button type="button" class="remove" aria-label="Remove item">×</button>';const sel=row.querySelector('.fee-type'),amt=row.querySelector('.fee-amount');sel.addEventListener('change',()=>{const x=state.feeStructure.find(v=>String(v.classId)===String($('#feeClass').value)&&String(v.feeTypeId)===String(sel.value));amt.value=x?Number(x.amount):'';summary()});row.querySelector('.remove').addEventListener('click',()=>{row.remove();summary()});return row}
+function resetFeeItems(){if(!$('#feeItems'))return;$('#feeItems').innerHTML='';summary()}
+function refreshFeeRowsForClass(){const cl=$('#feeClass')?.value||'';const configured=state.feeStructure.filter(x=>String(x.classId)===String(cl));document.querySelectorAll('.fee-row').forEach(row=>{const sel=row.querySelector('.fee-type');const current=sel.value;sel.innerHTML='<option value="">Fee type</option>'+configured.map(x=>`<option value="${x.feeTypeId}">${esc(x.feeTypeName)}</option>`).join('');sel.value=configured.some(x=>String(x.feeTypeId)===String(current))?current:(configured[0]?String(configured[0].feeTypeId):'');sel.dispatchEvent(new Event('change'))});if(!configured.length)$('#feeItems').innerHTML='<p class="muted">No fees configured for this class.</p>';summary()}
+function addConfiguredFeeRow(){const configured=state.feeStructure.filter(x=>String(x.classId)===String($('#feeClass').value));if(!configured.length){setNotice('No fee structure is configured for this class.',true);return}if($('#feeItems').querySelector('.muted'))$('#feeItems').innerHTML='';const used=[...document.querySelectorAll('.fee-row .fee-type')].map(x=>x.value);const next=configured.find(x=>!used.includes(String(x.feeTypeId)));if(!next){setNotice('All configured fee types are already selected.',true);return}const row=createConfiguredFeeRow();$('#feeItems').append(row);refreshFeeRowsForClass();row.querySelector('.fee-type').value=String(next.feeTypeId);row.querySelector('.fee-type').dispatchEvent(new Event('change'))}
+function summary(){const items=[...document.querySelectorAll('.fee-row')].map(r=>{const s=r.querySelector('.fee-type');return{name:s?.selectedOptions[0]?.text||'',amount:Number(r.querySelector('.fee-amount')?.value||0)}}).filter(x=>x.name&&x.amount>0);$('#summaryItems').innerHTML=items.length?items.map(i=>`<div class="summary-line"><span>${esc(i.name)}</span><b>${money(i.amount)}</b></div>`).join(''):'<p class="muted">Add fee items to begin.</p>';$('#feeTotal').textContent=money(items.reduce((s,x)=>s+x.amount,0))}
+async function loadFeeStructure(){if(!isSchoolRole())return;const year=$('#feeAcademicYear')?.value||academicYearForDate($('#paymentDate')?.value);if($('#feeAcademicYear'))$('#feeAcademicYear').value=year;try{const q=schoolQuery();state.feeStructure=await api(`/fee-structure?${q?`${q}&`:''}academicYear=${encodeURIComponent(year)}`)}catch(e){state.feeStructure=[]}renderFeeStructure();refreshFeeRowsForClass()}
+function renderFeeStructure(){const body=$('#feeStructureRows');if(!body)return;const year=$('#feeAcademicYear').value;const rows=[];state.classes.forEach(c=>state.types.forEach(t=>{const x=state.feeStructure.find(v=>String(v.classId)===String(c.id)&&String(v.feeTypeId)===String(t.id));rows.push({classId:c.id,className:c.name,section:c.section,feeTypeId:t.id,feeTypeName:t.displayName,amount:x?Number(x.amount):0,year})}));body.innerHTML=rows.length?rows.map(x=>`<tr><td><b>${esc(x.className)}${x.section?'-'+esc(x.section):''}</b></td><td>${esc(x.feeTypeName)}</td><td><input class="structure-amount" type="number" min="0" step="0.01" value="${x.amount}" data-class="${x.classId}" data-fee="${x.feeTypeId}" data-year="${esc(x.year)}"></td><td><button type="button" class="primary save-structure" data-class="${x.classId}" data-fee="${x.feeTypeId}" data-year="${esc(x.year)}">Save</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">Add a class first, then use “Configure fees”.</td></tr>'}
+function openFeeDialog(){if(!isAdmin())return;const year=$('#feeAcademicYear')?.value||academicYearForDate($('#paymentDate')?.value);$('#feeDialogYear').value=year;$('#feeDialogClass').innerHTML='<option value="">Choose a class</option>'+state.classes.map(c=>`<option value="${c.id}">${esc(c.name)}${c.section?'-'+esc(c.section):''}</option>`).join('');$('#feeDialogTuition').value='';$('#feeDialogVan').value='';if(!state.classes.length)return setNotice('Add a class before configuring fees.',true);$('#feeStructureDialog').showModal()}
+function populateFeeDialogForClass(){const classId=$('#feeDialogClass').value,year=$('#feeDialogYear').value;const tuition=state.types.find(t=>String(t.code).toUpperCase()==='TUITION');const van=state.types.find(t=>String(t.code).toUpperCase()==='VAN');const tx=state.feeStructure.find(x=>String(x.classId)===String(classId)&&String(x.feeTypeId)===String(tuition?.id));const vx=state.feeStructure.find(x=>String(x.classId)===String(classId)&&String(x.feeTypeId)===String(van?.id));$('#feeDialogTuition').value=tx?Number(tx.amount):'';$('#feeDialogVan').value=vx?Number(vx.amount):''}
+async function saveClassFees(e){e.preventDefault();try{const classId=Number($('#feeDialogClass').value),year=$('#feeDialogYear').value.trim();if(!classId||!/^\d{4}-\d{2}$/.test(year))return setNotice('Choose a class and enter academic year like 2026-27.',true);const tuition=state.types.find(t=>String(t.code).toUpperCase()==='TUITION');const van=state.types.find(t=>String(t.code).toUpperCase()==='VAN');if(!tuition||!van)return setNotice('Tuition and Van fee types are not configured for this school.',true);const requests=[{classId,feeTypeId:tuition.id,academicYear:year,amount:Number($('#feeDialogTuition').value||0)},{classId,feeTypeId:van.id,academicYear:year,amount:Number($('#feeDialogVan').value||0)}];for(const q of requests)await api('/fee-structure',{method:'PUT',body:JSON.stringify(q)});$('#feeAcademicYear').value=year;await loadFeeStructure();$('#feeStructureDialog').close();setNotice('Class fees saved successfully.')}catch(err){setNotice(err.message,true)}}
+async function loadUsers(){
+  if(!isAdmin())return;
   try{
-    const receipt = await api(`/fees?${schoolQuery()}`, { method:'POST', body: JSON.stringify({ studentId: Number($('#feeStudent').value), paymentDate: $('#paymentDate').value, items, notes: (document.getElementById('paymentNotes')?.value||null) }) });
-    // Notes are now sent to server and persisted. Prepare to print the receipt.
-    $('#feeForm').reset(); $('#feeItems').innerHTML=''; if(state.types && state.types.length) addFeeRow(); summary();
-    // prepend new receipt locally for instant UI feedback
-    state.receipts = [receipt].concat(state.receipts || []);
-    renderReceipts();
-    // refresh in background to reconcile with server
-    loadBase().catch(err=>console.warn('background refresh failed', err));
-    alert(`Receipt ${receipt.receiptNumber} created successfully.`);
-    // use printWindow helper
-    printWindowForReceipt(receipt);
-    // go to receipts view
-    document.querySelectorAll('.nav-link[data-view]').forEach(b=>b.classList.toggle('active', b.dataset.view==='receipts')); document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#receiptsView').classList.add('active');
-  }catch(err){ alert(err.message); }
-});
-
-// helper: generate/print window for a receipt
-function printWindowForReceipt(receipt){
-  // populate class from students cache if missing
-  let className = receipt.className || '';
-  let section = receipt.section || '';
-  if((!className || className==='') && receipt.studentId){
-    const s = (state.students||[]).find(x=>Number(x.id)===Number(receipt.studentId));
-    if(s && s.schoolClass){ className = s.schoolClass.name || ''; section = s.schoolClass.section || ''; }
+    state.users=await api('/users');
+    renderUsers();
+  }catch(e){
+    state.users=[];
+    renderUsers();
+    setNotice(e.message,true);
   }
-  const itemsHtml = (receipt.items||[]).map(i => `<tr><td>${esc(i.feeTypeName)}</td><td style="text-align:right">${money(i.amount)}</td></tr>`).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${esc(receipt.receiptNumber)}</title><style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}table{width:100%;border-collapse:collapse}td{padding:6px;border-bottom:1px solid #eee}</style></head><body><h2>Receipt ${esc(receipt.receiptNumber)}</h2><p><b>Student:</b> ${esc(receipt.studentName)} (${esc(receipt.admissionNumber)})<br><b>Class:</b> ${esc(className)} ${esc(section?(' - '+section):'')}</p><table>${itemsHtml}<tr><td style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${money(receipt.totalAmount)}</b></td></tr></table><p>${esc(receipt.notes||'')}</p><script>window.print();</script></body></html>`;
-  try{
-    const w = window.open('', '_blank', 'width=600,height=800');
-    if(w && w.document){ w.document.open(); w.document.write(html); w.document.close(); }
-    else {
-      const w2 = window.open('about:blank', '_blank');
-      if(w2 && w2.document){ w2.document.open(); w2.document.write(html); w2.document.close(); }
-      else { alert('Could not open print window.'); }
-    }
-  }catch(e){ console.warn('print error', e); alert('Could not open print window.'); }
 }
+function renderUsers(){
+  const rows=state.users.map(u=>`<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.role)}</td><td><span class="badge ${u.active?'active':'cancelled'}">${u.active?'ACTIVE':'INACTIVE'}</span></td><td>${u.role==='SCHOOL_USER'?`<button type="button" class="secondary user-toggle" data-id="${u.id}" data-active="${u.active}">${u.active?'Deactivate':'Activate'}</button>`:'—'}</td></tr>`).join('');
+  $('#userRows').innerHTML=rows||'<tr><td colspan="4" class="empty">No school users.</td></tr>';
+}
+async function loadSchools(){if(state.role!=='ROOT')return;state.schools=await api('/schools');$('#schoolRows').innerHTML=state.schools.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.phone||'—')}</td><td>${esc(s.email||'—')}</td><td><span class="badge ${s.active?'active':'cancelled'}">${s.active?'ACTIVE':'INACTIVE'}</span></td></tr>`).join('')||'<tr><td colspan="4" class="empty">No schools yet.</td></tr>'}
+function renderRootOverview(){const active=state.schools.filter(s=>s.active).length;$('#schoolCount').textContent=state.schools.length;$('#activeSchoolCount').textContent=active;$('#inactiveSchoolCount').textContent=state.schools.length-active;$('#rootSchoolRows').innerHTML=state.schools.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.phone||'—')}</td><td>${esc(s.email||'—')}</td><td><span class="badge ${s.active?'active':'cancelled'}">${s.active?'ACTIVE':'INACTIVE'}</span></td></tr>`).join('')||'<tr><td colspan="4" class="empty">No schools yet.</td></tr>'}
+async function runReport(){if(!isSchoolRole())return;const mode=$('#reportMode')?.value||'monthly';const cls=$('#reportClass')?.value||'';const classParam=cls?`&classId=${encodeURIComponent(cls)}`:'';let data;if(mode==='yearly'){const y=Number($('#reportYear').value);const q=schoolQuery();data=await api(`/reports/fees/yearly?${q?`${q}&`:''}startYear=${y}${classParam}`)}else{const v=$('#reportPeriod').value;if(!v)return;const [y,m]=v.split('-');const q=schoolQuery();data=await api(`/reports/fees/monthly?${q?`${q}&`:''}year=${y}&month=${Number(m)}${classParam}`)}$('#reportTotal').textContent=money(data.total);$('#reportCaption').textContent=data.period;const max=Math.max(...data.breakdown.map(x=>Number(x.amount)),1);$('#reportBreakdown').innerHTML=data.breakdown.length?data.breakdown.map(x=>`<div class="breakdown-row"><b>${esc(x.feeTypeName)}</b><div class="bar"><i style="width:${Number(x.amount)/max*100}%"></i></div><b>${money(x.amount)}</b></div>`).join(''):'<p class="empty">No active collections for this period.</p>'}
+async function cancelReceipt(id){const reason=prompt('Enter cancellation reason:');if(!reason||!reason.trim())return;const q=schoolQuery();await api(`/fees/${id}/cancel${q?`?${q}`:''}`,{method:'POST',body:JSON.stringify({reason:reason.trim()})});state.receipts=await api(`/fees${q?`?${q}`:''}`);renderReceipts();updateDashboard();setNotice('Receipt cancelled successfully.')}
+function printReceipt(id){const r=state.receipts.find(x=>Number(x.id)===Number(id));if(!r)return;const items=(r.items||[]).map(i=>`<tr><td>${esc(i.feeTypeName)}</td><td style="text-align:right">${money(i.amount)}</td></tr>`).join('');const html=`<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${esc(r.receiptNumber)}</title><style>body{font-family:Arial;padding:28px;max-width:680px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:8px;border-bottom:1px solid #eee}.total{font-size:18px;font-weight:bold}</style></head><body><h2>Fee Receipt</h2><p><b>Receipt:</b> ${esc(r.receiptNumber)}<br><b>Student:</b> ${esc(r.studentName)} (${esc(r.admissionNumber)})<br><b>Class:</b> ${esc(r.className)} ${esc(r.section?'- '+r.section:'')}<br><b>Date:</b> ${esc(r.paymentDate)}</p><table>${items}<tr><td style="text-align:right" class="total">Total</td><td style="text-align:right" class="total">${money(r.totalAmount)}</td></tr></table>${r.notes?`<p><b>Notes:</b> ${esc(r.notes)}</p>`:''}<script>window.print()</script></body></html>`;const w=window.open('','_blank','width=650,height=800');if(w){w.document.write(html);w.document.close()}else alert('Could not open print window.');}
+function schoolQuery(){return state.role==='ROOT'||!state.schoolId?'':`schoolId=${encodeURIComponent(state.schoolId)}`}
 
-// student toggle flow: show confirm modal, then perform action
-document.addEventListener('click', e => {
-  const t = e.target;
-  if (t.matches('.toggle-active')) {
-    const id = t.dataset.id;
-    const current = t.dataset.active === 'true';
-    const newActive = !current;
-    pendingToggleStudentId = id;
-    pendingToggleNewState = newActive;
-    const dlg = document.getElementById('confirmDialog');
-    if (dlg) {
-      document.getElementById('confirmMessage').textContent = `${newActive ? 'Activate' : 'Deactivate'} this student?`;
-      dlg.showModal();
-    } else {
-      // fallback: perform immediately
-      (async () => {
-        try { await api(`/students/${id}?${schoolQuery()}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) }); await loadBase(); alert('Student status updated'); } catch (err) { alert(err.message); }
-      })();
-    }
-  }
-});
-
-// confirm dialog handlers
-document.addEventListener('click', async e => {
-  const t = e.target;
-  if (t.id === 'confirmYes') {
-    const id = pendingToggleStudentId;
-    const newActive = pendingToggleNewState;
-    try {
-      await api(`/students/${id}?${schoolQuery()}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
-      const dlg = document.getElementById('confirmDialog'); dlg && dlg.close();
-      pendingToggleStudentId = null; pendingToggleNewState = null;
-      await loadBase();
-      alert('Student status updated');
-    } catch (err) { alert(err.message); }
-  }
-  if (t.id === 'confirmCancel') {
-    const dlg = document.getElementById('confirmDialog'); dlg && dlg.close();
-    pendingToggleStudentId = null; pendingToggleNewState = null;
-  }
-});
-
-// initial
-$('#paymentDate').value = new Date().toISOString().slice(0,10);
-if(state.user) loadBase().catch(e=>console.error(e)); else $('#connectionDialog').showModal();
+// Navigation
+ document.addEventListener('click',e=>{const t=e.target.closest('[data-view],[data-go]');if(t&&!t.classList.contains('hidden')){e.preventDefault();showView(t.dataset.view||t.dataset.go)}});
+$('#menuBtn')?.addEventListener('click',()=>$('.sidebar')?.classList.toggle('open'));
+$('#settingsBtn')?.addEventListener('click',()=>$('#connectionDialog').showModal());$('#profileBtn')?.addEventListener('click',()=>$('#connectionDialog').showModal());$('#logoutBtn')?.addEventListener('click',()=>{localStorage.clear();location.reload()});
+$('#studentSearch')?.addEventListener('input',renderStudents);$('#classFilter')?.addEventListener('change',renderStudents);
+$('#openStudent')?.addEventListener('click',()=>$('#studentDialog').showModal());$('#openSchool')?.addEventListener('click',()=>$('#schoolDialog').showModal());$('#rootAddSchool')?.addEventListener('click',()=>$('#schoolDialog').showModal());$('#openUser')?.addEventListener('click',()=>$('#userDialog').showModal());$('#openFeeStructure')?.addEventListener('click',openFeeDialog);
+$('#newClass')?.addEventListener('change',()=>$('#newClass').value==='__new'?$('#newClassPanel').classList.remove('hidden'):$('#newClassPanel').classList.add('hidden'));
+$('#cancelCreateClass')?.addEventListener('click',()=>{$('#newClassPanel').classList.add('hidden');$('#newClassName').value='';$('#newClassSection').value='';$('#newClass').value=''});
+$('#createClassBtn')?.addEventListener('click',async()=>{try{const name=$('#newClassName').value.trim(),section=$('#newClassSection').value.trim();if(!name)return setNotice('Enter a class name.',true);const q=schoolQuery();await api(`/classes${q?`?${q}`:''}`,{method:'POST',body:JSON.stringify({name,section,active:true})});await loadBase();$('#newClassPanel').classList.add('hidden');setNotice('Class created.')}catch(e){setNotice(e.message,true)}});
+$('#studentForm')?.addEventListener('submit',async e=>{e.preventDefault();try{let classId=$('#newClass').value;if(classId==='__new')return setNotice('Create the new class first.',true);const q=schoolQuery();await api(`/students${q?`?${q}`:''}`,{method:'POST',body:JSON.stringify({classId:Number(classId),admissionNumber:$('#newAdmission').value.trim(),name:$('#newName').value.trim(),fatherName:$('#newGuardian').value.trim(),phone:$('#newPhone').value.trim(),active:true})});$('#studentDialog').close();e.target.reset();await loadBase();setNotice('Student added.')}catch(err){setNotice(err.message,true)}});
+$('#feeClass')?.addEventListener('change',async()=>{renderFeeClassStudents();resetFeeItems();await loadFeeStructure();if(state.feeStructure.some(x=>String(x.classId)===String($('#feeClass').value)))addConfiguredFeeRow()});$('#addFeeItem')?.addEventListener('click',addConfiguredFeeRow);
+$('#feeForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const items=[...document.querySelectorAll('.fee-row')].map(r=>Number(r.querySelector('.fee-type').value)).filter(Boolean).map(feeTypeId=>({feeTypeId}));if(!$('#feeStudent').value||!items.length)return setNotice('Choose a student and at least one fee type.',true);const q=schoolQuery();const receipt=await api(`/fees${q?`?${q}`:''}`,{method:'POST',body:JSON.stringify({studentId:Number($('#feeStudent').value),paymentDate:$('#paymentDate').value,items,notes:$('#paymentNotes').value||null})});state.receipts=[receipt,...state.receipts];renderReceipts();updateDashboard();e.target.reset();$('#paymentDate').value=today();resetFeeItems();showView('receipts');printReceipt(receipt.id);setNotice(`Receipt ${receipt.receiptNumber} created successfully.`)}catch(err){setNotice(err.message,true)}});
+$('#refreshReceipts')?.addEventListener('click',async()=>{const q=schoolQuery();state.receipts=await api(`/fees${q?`?${q}`:''}`);renderReceipts();updateDashboard()});
+$('#reportPeriod')?.addEventListener('change',()=>runReport().catch(e=>setNotice(e.message,true)));$('#reportYear')?.addEventListener('change',()=>runReport().catch(e=>setNotice(e.message,true)));$('#reportMode')?.addEventListener('change',()=>{const y=$('#reportMode').value==='yearly';$('#monthlyReportControls').classList.toggle('hidden',y);$('#yearlyReportControls').classList.toggle('hidden',!y);runReport().catch(e=>setNotice(e.message,true))});$('#runReport')?.addEventListener('click',()=>runReport().catch(e=>setNotice(e.message,true)));
+$('#feeAcademicYear')?.addEventListener('change',()=>loadFeeStructure().catch(e=>setNotice(e.message,true)));$('#feeDialogClass')?.addEventListener('change',populateFeeDialogForClass);$('#feeStructureForm')?.addEventListener('submit',saveClassFees);
+$('#saveUser')?.addEventListener('click',async()=>{const button=$('#saveUser');if(button.disabled)return;const username=$('#newUserUsername').value.trim(),password=$('#newUserPassword').value;if(!username||!password)return setNotice('Username and password are required.',true);try{button.disabled=true;const created=await api('/users',{method:'POST',body:JSON.stringify({username,password})});state.users=[...(state.users||[]),created].sort((a,b)=>String(a.username).localeCompare(String(b.username),undefined,{sensitivity:'base'}));renderUsers();$('#userDialog').close();$('#userForm').reset();setNotice(`School user ${created.username} created successfully.`)}catch(e){setNotice(e.message,true)}finally{button.disabled=false}});
+$('#schoolForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const s=await api('/schools',{method:'POST',body:JSON.stringify({name:$('#schoolNewName').value.trim(),address:$('#schoolNewAddress').value,phone:$('#schoolNewPhone').value,email:$('#schoolNewEmail').value,adminUsername:$('#schoolAdminUsername').value.trim(),adminPassword:$('#schoolAdminPassword').value})});$('#schoolDialog').close();e.target.reset();await loadSchools();renderRootOverview();setNotice(`${s.name} created successfully.`)}catch(err){setNotice(err.message,true)}});
+document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t)return;if(t.id==='openUser'){e.preventDefault();$('#userDialog').showModal();return}if(t.id==='openFeeStructure'){e.preventDefault();openFeeDialog();return}try{if(t.matches('.print-btn'))printReceipt(t.dataset.id);if(t.matches('.cancel-receipt')){if(confirm('Cancel this receipt?'))await cancelReceipt(t.dataset.id)}if(t.matches('.student-toggle')){pendingAction={type:'student',id:t.dataset.id,active:t.dataset.active==='true'};$('#confirmMessage').textContent=`${pendingAction.active?'Deactivate':'Activate'} this student?`;$('#confirmDialog').showModal()}if(t.matches('.user-toggle')){pendingAction={type:'user',id:t.dataset.id,active:t.dataset.active==='true'};$('#confirmMessage').textContent=`${pendingAction.active?'Deactivate':'Activate'} this school user?`;$('#confirmDialog').showModal()}if(t.matches('.save-structure')){const tr=t.closest('tr'),amount=Number(tr.querySelector('.structure-amount').value);await api('/fee-structure',{method:'PUT',body:JSON.stringify({classId:Number(t.dataset.class),feeTypeId:Number(t.dataset.fee),academicYear:t.dataset.year,amount})});await loadFeeStructure();setNotice('Fee amount saved.')}}catch(err){setNotice(err.message,true)}});
+$('#confirmYes')?.addEventListener('click',async()=>{try{if(!pendingAction)return;if(pendingAction.type==='student'){const q=schoolQuery();await api(`/students/${pendingAction.id}${q?`?${q}`:''}`,{method:'PATCH',body:JSON.stringify({active:!pendingAction.active})});await loadBase();}else{await api(`/users/${pendingAction.id}?active=${!pendingAction.active}`,{method:'PATCH'});await loadUsers()}$('#confirmDialog').close();pendingAction=null;setNotice('Status updated.')}catch(e){setNotice(e.message,true)}});$('#confirmCancel')?.addEventListener('click',()=>{$('#confirmDialog').close();pendingAction=null});
+$('#connectionForm')?.addEventListener('submit',async e=>{e.preventDefault();if(e.submitter?.value==='cancel'){e.target.closest('dialog').close();return}state.user=$('#username').value.trim();state.password=$('#password').value;localStorage.user=state.user;localStorage.password=state.password;localStorage.removeItem('schoolId');try{await loadBase();if(state.role!=='ROOT'&&state.schoolId) localStorage.schoolId=state.schoolId;$('#connectionDialog').close();showView(state.role==='ROOT'?'rootOverview':'dashboard')}catch(err){setNotice(err.message,true)}});
+$('#paymentDate').value=today();$('#reportPeriod').value=today().slice(0,7);$('#reportYear').value=new Date().getFullYear();
+if(state.user)loadBase().then(()=>{applyRoleUI();showView(state.role==='ROOT'?'rootOverview':'dashboard')}).catch(e=>{console.warn(e);setNotice(e.message,true);$('#connectionDialog').showModal()});else $('#connectionDialog').showModal();
